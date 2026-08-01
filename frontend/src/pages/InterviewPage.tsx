@@ -377,7 +377,16 @@ function InterviewPage() {
     const overallScore = computeOverallScore(transcript)
     const emotionSamples = emotionSamplesRef.current
 
-    const fullReport = {
+    const fullReport: {
+      id?: string
+      targetCompany: string
+      candidateName: string
+      overallScore: number | null
+      transcript: AnswerRecord[]
+      emotionSamples: EmotionSample[]
+      strengths: string[]
+      improvements: string[]
+    } = {
       targetCompany: candidate.targetCompany,
       candidateName: candidate.name,
       overallScore,
@@ -402,7 +411,7 @@ function InterviewPage() {
       if (error) {
         console.error('Supabase save failed:', error)
       } else if (data) {
-        fullReport['id' as any] = data.id
+        fullReport.id = data.id
       }
     } catch (err) {
       console.error('Supabase save failed:', err)
