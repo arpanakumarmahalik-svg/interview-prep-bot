@@ -36,6 +36,17 @@ function AboutPage() {
         <img src={logo} alt="HireReady AI" className="h-8 w-auto" />
       </div>
 
+      {user && (
+        <div className="absolute top-6 right-6 z-10">
+          <button
+            onClick={() => navigate('/dashboard')}
+            className="text-sm font-medium text-gray-600 dark:text-gray-300 hover:text-blue-600 dark:hover:text-blue-400 transition"
+          >
+            Dashboard →
+          </button>
+        </div>
+      )}
+
       <div className="relative z-10 flex flex-col items-center justify-center text-center px-6 pt-32 pb-20">
         <div className="inline-flex items-center gap-2 text-xs font-medium px-3 py-1 rounded-full border border-gray-300 dark:border-gray-700 text-gray-500 dark:text-gray-400 mb-6 opacity-0 animate-[fadeInUp_0.6s_ease-out_forwards]">
           ✨ AI + Computer Vision · For engineering campuses

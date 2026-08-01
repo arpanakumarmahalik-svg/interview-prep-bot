@@ -28,23 +28,15 @@ class AnswerRequest(BaseModel):
     skills: str = ""
 
 
-class ScoreRequest(BaseModel):
+class EvaluateTranscriptItem(BaseModel):
     stage: str
     question: str
     answer: str
-    target_company: str = ""
 
 
-class TranscriptItem(BaseModel):
-    stage: str
-    question: str
-    answer: str
-    score: int | None = None
-
-
-class SummaryRequest(BaseModel):
+class EvaluateRequest(BaseModel):
     target_company: str
-    transcript: list[TranscriptItem]
+    transcript: list[EvaluateTranscriptItem]
 
 
 STAGE_INSTRUCTIONS = {
@@ -96,39 +88,33 @@ and professional. Keep it brief (2-4 sentences). Return ONLY the answer text, no
 """
 
 
-def build_score_prompt(req: ScoreRequest) -> str:
-    return f"""You are grading a candidate's answer in a job interview for {req.target_company}.
-
-Interview stage: {req.stage}
-Question: {req.question}
-Candidate's answer: {req.answer}
-
-Score this answer from 0 to 100 based on clarity, confidence (how the answer is written/structured),
-and relevance to the question. If the stage is "coding", also weigh correctness of the code/logic.
-
-Return ONLY valid JSON in exactly this format, with no markdown code fences and no extra text:
-{{"score": <number 0-100>, "feedback": "<one short sentence of feedback>"}}
-"""
-
-
-def build_summary_prompt(req: SummaryRequest) -> str:
+def build_evaluate_prompt(req: EvaluateRequest) -> str:
     lines = []
     for item in req.transcript:
-        score_text = item.score if item.score is not None else "N/A"
-        lines.append(f"- [{item.stage}] Q: {item.question}\n  A: {item.answer}\n  Score: {score_text}")
+        lines.append(f"- [{item.stage}] Q: {item.question}\n  A: {item.answer}")
     transcript_text = "\n".join(lines)
 
-    return f"""You are reviewing a completed mock job interview for {req.target_company}.
+    return f"""You are evaluating a completed mock job interview for {req.target_company}.
 
 Full transcript:
 {transcript_text}
 
-Based on the candidate's overall performance across all stages, list:
+For EACH item above, score the candidate's answer from 0 to 100 based on clarity, confidence
+(how the answer is written/structured), and relevance to the question. If the stage is "coding",
+also weigh correctness of the code/logic. Give one short sentence of feedback per answer.
+
+Then, based on the candidate's OVERALL performance across all stages, list:
 - 3 to 4 specific strengths
 - 3 to 4 specific areas to improve
 
 Return ONLY valid JSON in exactly this format, no markdown fences, no extra text:
-{{"strengths": ["...", "..."], "improvements": ["...", "..."]}}
+{{
+  "scores": [{{"stage": "...", "score": <0-100>, "feedback": "..."}}],
+  "strengths": ["...", "..."],
+  "improvements": ["...", "..."]
+}}
+The "scores" array must have exactly one entry per transcript item above, in the same order,
+using the same "stage" value shown for each.
 """
 
 
@@ -161,24 +147,14 @@ def answer_question(req: AnswerRequest):
         raise HTTPException(status_code=500, detail=f"Gemini error: {str(e)}")
 
 
-@router.post("/score")
-def score_answer(req: ScoreRequest):
+@router.post("/evaluate")
+def evaluate_interview(req: EvaluateRequest):
     try:
-        prompt = build_score_prompt(req)
-        response = client.models.generate_content(model=MODEL_NAME, contents=prompt)
-        result = parse_json_response(response.text)
-        return {"score": result.get("score", 0), "feedback": result.get("feedback", "")}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Gemini error: {str(e)}")
-
-
-@router.post("/summarize")
-def summarize_interview(req: SummaryRequest):
-    try:
-        prompt = build_summary_prompt(req)
+        prompt = build_evaluate_prompt(req)
         response = client.models.generate_content(model=MODEL_NAME, contents=prompt)
         result = parse_json_response(response.text)
         return {
+            "scores": result.get("scores", []),
             "strengths": result.get("strengths", []),
             "improvements": result.get("improvements", [])
         }

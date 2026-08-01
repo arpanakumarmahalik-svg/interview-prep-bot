@@ -58,8 +58,6 @@ function formatTime(totalSeconds: number): string {
   return `${minutes}:${seconds.toString().padStart(2, '0')}`
 }
 
-// Waits for the browser's voice list to actually load — on some devices/browsers
-// getVoices() returns empty the first time it's called and fills in a moment later.
 function getVoices(): Promise<SpeechSynthesisVoice[]> {
   return new Promise(resolve => {
     if (!('speechSynthesis' in window)) {
@@ -71,22 +69,28 @@ function getVoices(): Promise<SpeechSynthesisVoice[]> {
       resolve(existing)
       return
     }
+    let resolved = false
     window.speechSynthesis.onvoiceschanged = () => {
+      if (resolved) return
+      resolved = true
       resolve(window.speechSynthesis.getVoices())
     }
+    // Safety fallback: some browsers never fire onvoiceschanged reliably
+    setTimeout(() => {
+      if (resolved) return
+      resolved = true
+      resolve(window.speechSynthesis.getVoices())
+    }, 1000)
   })
 }
 
-// Picks a voice matching the selected gender using name-based keywords.
-// There's no standardized "gender" field on browser voices, so this matches
-// common naming patterns (works well on Chrome desktop, Android, and most others).
 function pickVoiceForGender(voices: SpeechSynthesisVoice[], gender: string): SpeechSynthesisVoice | null {
   const englishVoices = voices.filter(v => v.lang.toLowerCase().startsWith('en'))
   const pool = englishVoices.length > 0 ? englishVoices : voices
   if (pool.length === 0) return null
 
-  const maleKeywords = ['male', 'david', 'daniel', 'alex', 'fred', 'ravi', 'george', 'james', 'mark', 'guy', 'aaron']
-  const femaleKeywords = ['female', 'zira', 'samantha', 'heera', 'susan', 'victoria', 'karen', 'linda', 'moira', 'tessa', 'salli', 'joanna', 'aria']
+  const maleKeywords = ['male', 'david', 'daniel', 'alex', 'fred', 'ravi', 'george', 'james', 'mark', 'guy', 'aaron', 'tom', 'oliver']
+  const femaleKeywords = ['female', 'zira', 'samantha', 'heera', 'susan', 'victoria', 'karen', 'linda', 'moira', 'tessa', 'salli', 'joanna', 'aria', 'samantha', 'sara']
 
   const wantMale = gender === 'male'
   const keywords = wantMale ? maleKeywords : femaleKeywords
@@ -95,17 +99,24 @@ function pickVoiceForGender(voices: SpeechSynthesisVoice[], gender: string): Spe
   const match = pool.find(v => keywords.some(k => v.name.toLowerCase().includes(k)))
   if (match) return match
 
-  // Fall back to any voice that at least doesn't clearly sound like the opposite gender
   const safe = pool.find(v => !opposite.some(k => v.name.toLowerCase().includes(k)))
   return safe || pool[0]
 }
 
-function speak(text: string, voice: SpeechSynthesisVoice | null, onEnd?: () => void) {
+// Pitch is a reliable, universal fallback: even when the exact voice can't be
+// confidently identified as male/female by name, shifting pitch down/up makes
+// it consistently sound the right gender.
+function pitchForGender(gender: string): number {
+  return gender === 'female' ? 1.25 : 0.8
+}
+
+function speak(text: string, voice: SpeechSynthesisVoice | null, pitch: number, onEnd?: () => void) {
   if (!('speechSynthesis' in window)) return
   window.speechSynthesis.cancel()
   const utterance = new SpeechSynthesisUtterance(text)
   utterance.lang = 'en-IN'
   utterance.rate = 1
+  utterance.pitch = pitch
   if (voice) utterance.voice = voice
   if (onEnd) utterance.onend = onEnd
   window.speechSynthesis.speak(utterance)
@@ -149,7 +160,6 @@ function InterviewPage() {
   const [questionError, setQuestionError] = useState('')
   const [currentAnswer, setCurrentAnswer] = useState('')
   const [answers, setAnswers] = useState<AnswerRecord[]>([])
-  const [scoring, setScoring] = useState(false)
 
   const [reverseQaAnswer, setReverseQaAnswer] = useState('')
   const [gettingAnswer, setGettingAnswer] = useState(false)
@@ -161,6 +171,8 @@ function InterviewPage() {
   const [reportData, setReportData] = useState<any>(null)
   const greetingRef = useRef(getGreeting())
   const selectedVoiceRef = useRef<SpeechSynthesisVoice | null>(null)
+  const pitchRef = useRef<number>(1)
+  const [voiceReady, setVoiceReady] = useState(false)
 
   const [isListening, setIsListening] = useState(false)
   const [voiceError, setVoiceError] = useState('')
@@ -180,19 +192,25 @@ function InterviewPage() {
     if (!candidate) navigate('/form')
   }, [candidate, navigate])
 
-  // Pick the right-gendered voice once, as soon as we know the candidate's selection
+  // Voice must be fully selected BEFORE the first question is fetched/spoken —
+  // this fixes the race that caused the wrong-gender voice on the first question.
   useEffect(() => {
     if (!candidate) return
+    let cancelled = false
+    pitchRef.current = pitchForGender(candidate.gender)
     getVoices().then(voices => {
+      if (cancelled) return
       selectedVoiceRef.current = pickVoiceForGender(voices, candidate.gender)
+      setVoiceReady(true)
     })
+    return () => { cancelled = true }
   }, [candidate])
 
   useEffect(() => {
-    if (!candidate || isFinished) return
+    if (!candidate || isFinished || !voiceReady) return
     fetchQuestionForStage(stageIndex)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [stageIndex, candidate])
+  }, [stageIndex, candidate, voiceReady])
 
   useEffect(() => {
     if (!candidate || isFinished) return
@@ -258,7 +276,7 @@ function InterviewPage() {
           ? `${greetingRef.current}, ${candidate.name}. ${data.question}`
           : data.question
         setIsSpeaking(true)
-        speak(textToSpeak, selectedVoiceRef.current, () => setIsSpeaking(false))
+        speak(textToSpeak, selectedVoiceRef.current, pitchRef.current, () => setIsSpeaking(false))
       }
     } catch (err) {
       setQuestionError(err instanceof Error ? err.message : getFriendlyErrorMessage(''))
@@ -346,7 +364,7 @@ function InterviewPage() {
 
       if (!isMuted) {
         setIsSpeaking(true)
-        speak(data.answer, selectedVoiceRef.current, () => setIsSpeaking(false))
+        speak(data.answer, selectedVoiceRef.current, pitchRef.current, () => setIsSpeaking(false))
       }
     } catch (err) {
       setReverseQaAnswer(err instanceof Error ? err.message : getFriendlyErrorMessage(''))
@@ -356,35 +374,16 @@ function InterviewPage() {
     }
   }
 
-  const scoreCurrentAnswer = async (stage: string, question: string, answer: string) => {
-    if (!candidate) return null
-    try {
-      const response = await fetch(`${API_URL}/api/questions/score`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ stage, question, answer, target_company: candidate.targetCompany }),
-      })
-      if (!response.ok) return null
-      const data = await response.json()
-      return { score: data.score as number, feedback: data.feedback as string }
-    } catch {
-      return null
-    }
-  }
-
-  const handleNext = async () => {
+  // No Gemini call here anymore — scoring happens once, in bulk, at finishInterview.
+  const handleNext = () => {
     if (isListening) stopListening()
-
-    setScoring(true)
-    const result = await scoreCurrentAnswer(STAGES[stageIndex].key, currentQuestion, currentAnswer)
-    setScoring(false)
 
     const record: AnswerRecord = {
       stage: STAGES[stageIndex].key,
       question: currentQuestion,
       answer: currentAnswer,
-      score: result?.score ?? null,
-      feedback: result?.feedback ?? '',
+      score: null,
+      feedback: '',
     }
     const updatedAnswers = [...answers, record]
     setAnswers(updatedAnswers)
@@ -399,31 +398,41 @@ function InterviewPage() {
 
   const finishInterview = async (finalAnswers?: AnswerRecord[]) => {
     if (isListening) stopListening()
-    const transcript = finalAnswers ?? answers
+    let transcript = finalAnswers ?? answers
     setIsFinished(true)
-    if (!isMuted) speak(CLOSING_MESSAGE, selectedVoiceRef.current)
+    if (!isMuted) speak(CLOSING_MESSAGE, selectedVoiceRef.current, pitchRef.current)
 
     if (!candidate) return
     setPreparingReport(true)
 
     let strengths: string[] = []
     let improvements: string[] = []
+
     try {
-      const res = await fetch(`${API_URL}/api/questions/summarize`, {
+      const scorable = transcript.filter(t => t.stage !== 'reverse_qa')
+      const res = await fetch(`${API_URL}/api/questions/evaluate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           target_company: candidate.targetCompany,
-          transcript: transcript.map(t => ({ stage: t.stage, question: t.question, answer: t.answer, score: t.score })),
+          transcript: scorable.map(t => ({ stage: t.stage, question: t.question, answer: t.answer })),
         }),
       })
       if (res.ok) {
         const data = await res.json()
         strengths = data.strengths ?? []
         improvements = data.improvements ?? []
+        const scoreMap: Record<string, { score: number; feedback: string }> = {}
+        ;(data.scores ?? []).forEach((s: any) => {
+          scoreMap[s.stage] = { score: s.score, feedback: s.feedback }
+        })
+        transcript = transcript.map(t => {
+          const match = scoreMap[t.stage]
+          return match ? { ...t, score: match.score, feedback: match.feedback } : t
+        })
       }
     } catch {
-      // keep empty arrays on failure — report still works without them
+      // keep empty on failure — report still works without scores
     }
 
     const overallScore = computeOverallScore(transcript)
@@ -497,7 +506,7 @@ function InterviewPage() {
   const avatarLabel = candidate.gender === 'female' ? 'Interviewer (F)' : 'Interviewer (M)'
   const avatarImage = candidate.gender === 'female' ? interviewerFemale : interviewerMale
   const isLowTime = secondsLeft <= 60
-  const nextButtonLabel = scoring ? 'Scoring...' : (stageIndex < STAGES.length - 1 ? 'Next Question' : 'Continue')
+  const nextButtonLabel = stageIndex < STAGES.length - 1 ? 'Next Question' : 'Continue'
 
   const micButton = !loadingQuestion && !questionError && (
     <button
@@ -564,7 +573,7 @@ function InterviewPage() {
         }}
         placeholder={isCodingStage ? '// Write your code here...' : 'Type or speak your answer here...'}
         rows={isCodingStage ? 8 : 4}
-        disabled={loadingQuestion || !!questionError || scoring}
+        disabled={loadingQuestion || !!questionError}
         spellCheck={!isCodingStage}
         className={`w-full p-3 rounded-lg border mb-4 disabled:opacity-50 ${
           isCodingStage
@@ -574,7 +583,7 @@ function InterviewPage() {
       />
       <button
         onClick={handleNext}
-        disabled={loadingQuestion || !!questionError || !currentAnswer.trim() || scoring}
+        disabled={loadingQuestion || !!questionError || !currentAnswer.trim()}
         className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 text-white font-medium py-3 rounded-lg transition"
       >
         {nextButtonLabel}
@@ -620,7 +629,10 @@ function InterviewPage() {
         ? 'flex-1 flex flex-col md:flex-row gap-4 px-6 py-6 max-w-5xl mx-auto w-full'
         : 'flex-1 flex flex-col items-center justify-center px-6 py-8'}
       >
-        <div className={showCamera ? 'flex-1 min-h-[320px] md:min-h-0' : 'absolute w-px h-px overflow-hidden opacity-0 pointer-events-none'}>
+        {/* Camera is always mounted — recording emotions for the whole interview.
+            When hidden, it's moved off-screen (not shrunk/opacity-0), so browsers
+            don't throttle or pause the video stream. */}
+        <div className={showCamera ? 'flex-1 min-h-[320px] md:min-h-0' : 'fixed top-0 -left-[9999px] w-40 h-32 pointer-events-none'}>
           <EmotionWebcam size={showCamera ? 'full' : 'small'} showOverlay={showCamera} onEmotionUpdate={handleEmotionUpdate} />
         </div>
 
