@@ -47,22 +47,6 @@ Built as a major project for Diploma in Information Technology, SKDAV Government
 
 ---
 
-## 📸 Screenshots
-
-![App Screenshot](Screenshot 2026-07-31 1130509.png)
-![App Screenshot](Screenshot 2026-07-31 113052.jpg)
-![App Screenshot](Screenshot 2026-07-31 113125.jpg)
-![App Screenshot](Screenshot 2026-07-31 113406.jpg)
-![App Screenshot](Screenshot 2026-07-31 114709.jpg)
-![App Screenshot](Screenshot 2026-07-31 115054.jpg)
-![App Screenshot](Screenshot 2026-07-31 162837.jpg)
-![App Screenshot](Screenshot 2026-07-31 162855.jpg)
-
-
-
-
----
-
 ## 🏗️ Project Structure
 
 hireready-ai/
