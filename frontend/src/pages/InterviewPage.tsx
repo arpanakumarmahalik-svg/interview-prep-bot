@@ -58,12 +58,55 @@ function formatTime(totalSeconds: number): string {
   return `${minutes}:${seconds.toString().padStart(2, '0')}`
 }
 
-function speak(text: string, onEnd?: () => void) {
+// Waits for the browser's voice list to actually load — on some devices/browsers
+// getVoices() returns empty the first time it's called and fills in a moment later.
+function getVoices(): Promise<SpeechSynthesisVoice[]> {
+  return new Promise(resolve => {
+    if (!('speechSynthesis' in window)) {
+      resolve([])
+      return
+    }
+    const existing = window.speechSynthesis.getVoices()
+    if (existing.length > 0) {
+      resolve(existing)
+      return
+    }
+    window.speechSynthesis.onvoiceschanged = () => {
+      resolve(window.speechSynthesis.getVoices())
+    }
+  })
+}
+
+// Picks a voice matching the selected gender using name-based keywords.
+// There's no standardized "gender" field on browser voices, so this matches
+// common naming patterns (works well on Chrome desktop, Android, and most others).
+function pickVoiceForGender(voices: SpeechSynthesisVoice[], gender: string): SpeechSynthesisVoice | null {
+  const englishVoices = voices.filter(v => v.lang.toLowerCase().startsWith('en'))
+  const pool = englishVoices.length > 0 ? englishVoices : voices
+  if (pool.length === 0) return null
+
+  const maleKeywords = ['male', 'david', 'daniel', 'alex', 'fred', 'ravi', 'george', 'james', 'mark', 'guy', 'aaron']
+  const femaleKeywords = ['female', 'zira', 'samantha', 'heera', 'susan', 'victoria', 'karen', 'linda', 'moira', 'tessa', 'salli', 'joanna', 'aria']
+
+  const wantMale = gender === 'male'
+  const keywords = wantMale ? maleKeywords : femaleKeywords
+  const opposite = wantMale ? femaleKeywords : maleKeywords
+
+  const match = pool.find(v => keywords.some(k => v.name.toLowerCase().includes(k)))
+  if (match) return match
+
+  // Fall back to any voice that at least doesn't clearly sound like the opposite gender
+  const safe = pool.find(v => !opposite.some(k => v.name.toLowerCase().includes(k)))
+  return safe || pool[0]
+}
+
+function speak(text: string, voice: SpeechSynthesisVoice | null, onEnd?: () => void) {
   if (!('speechSynthesis' in window)) return
   window.speechSynthesis.cancel()
   const utterance = new SpeechSynthesisUtterance(text)
   utterance.lang = 'en-IN'
   utterance.rate = 1
+  if (voice) utterance.voice = voice
   if (onEnd) utterance.onend = onEnd
   window.speechSynthesis.speak(utterance)
 }
@@ -117,6 +160,7 @@ function InterviewPage() {
   const [preparingReport, setPreparingReport] = useState(false)
   const [reportData, setReportData] = useState<any>(null)
   const greetingRef = useRef(getGreeting())
+  const selectedVoiceRef = useRef<SpeechSynthesisVoice | null>(null)
 
   const [isListening, setIsListening] = useState(false)
   const [voiceError, setVoiceError] = useState('')
@@ -135,6 +179,14 @@ function InterviewPage() {
   useEffect(() => {
     if (!candidate) navigate('/form')
   }, [candidate, navigate])
+
+  // Pick the right-gendered voice once, as soon as we know the candidate's selection
+  useEffect(() => {
+    if (!candidate) return
+    getVoices().then(voices => {
+      selectedVoiceRef.current = pickVoiceForGender(voices, candidate.gender)
+    })
+  }, [candidate])
 
   useEffect(() => {
     if (!candidate || isFinished) return
@@ -206,7 +258,7 @@ function InterviewPage() {
           ? `${greetingRef.current}, ${candidate.name}. ${data.question}`
           : data.question
         setIsSpeaking(true)
-        speak(textToSpeak, () => setIsSpeaking(false))
+        speak(textToSpeak, selectedVoiceRef.current, () => setIsSpeaking(false))
       }
     } catch (err) {
       setQuestionError(err instanceof Error ? err.message : getFriendlyErrorMessage(''))
@@ -294,7 +346,7 @@ function InterviewPage() {
 
       if (!isMuted) {
         setIsSpeaking(true)
-        speak(data.answer, () => setIsSpeaking(false))
+        speak(data.answer, selectedVoiceRef.current, () => setIsSpeaking(false))
       }
     } catch (err) {
       setReverseQaAnswer(err instanceof Error ? err.message : getFriendlyErrorMessage(''))
@@ -349,7 +401,7 @@ function InterviewPage() {
     if (isListening) stopListening()
     const transcript = finalAnswers ?? answers
     setIsFinished(true)
-    if (!isMuted) speak(CLOSING_MESSAGE)
+    if (!isMuted) speak(CLOSING_MESSAGE, selectedVoiceRef.current)
 
     if (!candidate) return
     setPreparingReport(true)
@@ -568,8 +620,6 @@ function InterviewPage() {
         ? 'flex-1 flex flex-col md:flex-row gap-4 px-6 py-6 max-w-5xl mx-auto w-full'
         : 'flex-1 flex flex-col items-center justify-center px-6 py-8'}
       >
-        {/* Camera stays mounted the whole interview — always detecting emotions in the background,
-            regardless of whether the visible preview is toggled on. */}
         <div className={showCamera ? 'flex-1 min-h-[320px] md:min-h-0' : 'absolute w-px h-px overflow-hidden opacity-0 pointer-events-none'}>
           <EmotionWebcam size={showCamera ? 'full' : 'small'} showOverlay={showCamera} onEmotionUpdate={handleEmotionUpdate} />
         </div>
