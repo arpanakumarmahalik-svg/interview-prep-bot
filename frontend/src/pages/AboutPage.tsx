@@ -37,10 +37,11 @@ function AboutPage() {
       </div>
 
       {user && (
-        <div className="absolute top-6 right-6 z-10">
+        <div className="absolute top-6 right-6 z-20">
           <button
+            type="button"
             onClick={() => navigate('/dashboard')}
-            className="text-sm font-medium text-gray-600 dark:text-gray-300 hover:text-blue-600 dark:hover:text-blue-400 transition"
+            className="relative z-20 text-sm font-medium text-gray-600 dark:text-gray-300 hover:text-blue-600 dark:hover:text-blue-400 transition cursor-pointer"
           >
             Dashboard →
           </button>
