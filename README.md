@@ -49,22 +49,25 @@ Built as a major project for Diploma in Information Technology, SKDAV Government
 
 ## 🏗️ Project Structure
 
-hireready-ai/
+hiready-ai/
+│
 ├── backend/
-│ ├── app/
-│ │ ├── main.py
-│ │ ├── config.py
-│ │ └── routers/
-│ │ ├── resume.py
-│ │ └── questions.py
-│ └── requirements.txt
+│   ├── app/
+│   │   ├── main.py
+│   │   ├── config.py
+│   │   ├── routers/
+│   │   │   └── resume.py
+│   │   └── questions.py
+│   │
+│   └── requirements.txt
+│
 └── frontend/
-└── src/
-├── pages/
-├── components/
-├── context/
-├── hooks/
-└── lib/
+    └── src/
+        ├── pages/
+        ├── components/
+        ├── context/
+        ├── hooks/
+        └── lib/
 
 ---
 
