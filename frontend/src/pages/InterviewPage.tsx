@@ -45,6 +45,11 @@ interface EmotionSample {
   expressions: Record<string, number>
 }
 
+interface QAItem {
+  stage: string
+  question: string
+}
+
 function getGreeting(): string {
   const hour = new Date().getHours()
   if (hour < 12) return 'Good morning'
@@ -75,7 +80,6 @@ function getVoices(): Promise<SpeechSynthesisVoice[]> {
       resolved = true
       resolve(window.speechSynthesis.getVoices())
     }
-    // Safety fallback: some browsers never fire onvoiceschanged reliably
     setTimeout(() => {
       if (resolved) return
       resolved = true
@@ -90,7 +94,7 @@ function pickVoiceForGender(voices: SpeechSynthesisVoice[], gender: string): Spe
   if (pool.length === 0) return null
 
   const maleKeywords = ['male', 'david', 'daniel', 'alex', 'fred', 'ravi', 'george', 'james', 'mark', 'guy', 'aaron', 'tom', 'oliver']
-  const femaleKeywords = ['female', 'zira', 'samantha', 'heera', 'susan', 'victoria', 'karen', 'linda', 'moira', 'tessa', 'salli', 'joanna', 'aria', 'samantha', 'sara']
+  const femaleKeywords = ['female', 'zira', 'samantha', 'heera', 'susan', 'victoria', 'karen', 'linda', 'moira', 'tessa', 'salli', 'joanna', 'aria', 'sara']
 
   const wantMale = gender === 'male'
   const keywords = wantMale ? maleKeywords : femaleKeywords
@@ -103,9 +107,6 @@ function pickVoiceForGender(voices: SpeechSynthesisVoice[], gender: string): Spe
   return safe || pool[0]
 }
 
-// Pitch is a reliable, universal fallback: even when the exact voice can't be
-// confidently identified as male/female by name, shifting pitch down/up makes
-// it consistently sound the right gender.
 function pitchForGender(gender: string): number {
   return gender === 'female' ? 1.25 : 0.8
 }
@@ -156,10 +157,13 @@ function InterviewPage() {
 
   const [stageIndex, setStageIndex] = useState(0)
   const [currentQuestion, setCurrentQuestion] = useState('')
-  const [loadingQuestion, setLoadingQuestion] = useState(false)
-  const [questionError, setQuestionError] = useState('')
   const [currentAnswer, setCurrentAnswer] = useState('')
   const [answers, setAnswers] = useState<AnswerRecord[]>([])
+
+  // All 8 questions are fetched ONCE, up front — this is the key change that cuts API usage.
+  const [allQuestions, setAllQuestions] = useState<QAItem[]>([])
+  const [loadingQuestions, setLoadingQuestions] = useState(true)
+  const [questionsError, setQuestionsError] = useState('')
 
   const [reverseQaAnswer, setReverseQaAnswer] = useState('')
   const [gettingAnswer, setGettingAnswer] = useState(false)
@@ -192,8 +196,6 @@ function InterviewPage() {
     if (!candidate) navigate('/form')
   }, [candidate, navigate])
 
-  // Voice must be fully selected BEFORE the first question is fetched/spoken —
-  // this fixes the race that caused the wrong-gender voice on the first question.
   useEffect(() => {
     if (!candidate) return
     let cancelled = false
@@ -206,11 +208,30 @@ function InterviewPage() {
     return () => { cancelled = true }
   }, [candidate])
 
+  // Fetch ALL 8 questions in one Gemini call, once, as soon as the voice is ready
   useEffect(() => {
-    if (!candidate || isFinished || !voiceReady) return
-    fetchQuestionForStage(stageIndex)
+    if (!candidate || !voiceReady || allQuestions.length > 0) return
+    fetchAllQuestions()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [stageIndex, candidate, voiceReady])
+  }, [candidate, voiceReady])
+
+  // Speak/display the question for the current stage whenever the stage changes
+  // (no network call here — the question is already sitting in allQuestions)
+  useEffect(() => {
+    if (!candidate || isFinished || allQuestions.length === 0) return
+    const q = allQuestions[stageIndex]
+    if (!q) return
+    setCurrentQuestion(q.question)
+
+    if (!isMuted) {
+      const textToSpeak = stageIndex === 0
+        ? `${greetingRef.current}, ${candidate.name}. ${q.question}`
+        : q.question
+      setIsSpeaking(true)
+      speak(textToSpeak, selectedVoiceRef.current, pitchRef.current, () => setIsSpeaking(false))
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stageIndex, allQuestions])
 
   useEffect(() => {
     if (!candidate || isFinished) return
@@ -242,18 +263,16 @@ function InterviewPage() {
     })
   }
 
-  const fetchQuestionForStage = async (index: number) => {
+  const fetchAllQuestions = async () => {
     if (!candidate) return
-    setLoadingQuestion(true)
-    setQuestionError('')
-    setCurrentQuestion('')
+    setLoadingQuestions(true)
+    setQuestionsError('')
 
     try {
-      const response = await fetch(`${API_URL}/api/questions/generate`, {
+      const response = await fetch(`${API_URL}/api/questions/generate-all`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          stage: STAGES[index].key,
           branch: candidate.branch,
           year: candidate.year,
           skills: candidate.skills,
@@ -269,19 +288,11 @@ function InterviewPage() {
       }
 
       const data = JSON.parse(rawText)
-      setCurrentQuestion(data.question)
-
-      if (!isMuted) {
-        const textToSpeak = index === 0
-          ? `${greetingRef.current}, ${candidate.name}. ${data.question}`
-          : data.question
-        setIsSpeaking(true)
-        speak(textToSpeak, selectedVoiceRef.current, pitchRef.current, () => setIsSpeaking(false))
-      }
+      setAllQuestions(data.questions || [])
     } catch (err) {
-      setQuestionError(err instanceof Error ? err.message : getFriendlyErrorMessage(''))
+      setQuestionsError(err instanceof Error ? err.message : getFriendlyErrorMessage(''))
     } finally {
-      setLoadingQuestion(false)
+      setLoadingQuestions(false)
     }
   }
 
@@ -374,7 +385,6 @@ function InterviewPage() {
     }
   }
 
-  // No Gemini call here anymore — scoring happens once, in bulk, at finishInterview.
   const handleNext = () => {
     if (isListening) stopListening()
 
@@ -508,7 +518,7 @@ function InterviewPage() {
   const isLowTime = secondsLeft <= 60
   const nextButtonLabel = stageIndex < STAGES.length - 1 ? 'Next Question' : 'Continue'
 
-  const micButton = !loadingQuestion && !questionError && (
+  const micButton = !loadingQuestions && !questionsError && (
     <button
       type="button"
       onClick={isListening ? stopListening : () => startListening()}
@@ -527,7 +537,7 @@ function InterviewPage() {
         onChange={e => setCurrentAnswer(e.target.value)}
         placeholder="Type or speak your question for the interviewer..."
         rows={3}
-        disabled={loadingQuestion || !!questionError || reverseQaAnswered}
+        disabled={loadingQuestions || !!questionsError || reverseQaAnswered}
         className="w-full p-3 rounded-lg border dark:bg-gray-800 dark:border-gray-700 mb-4 disabled:opacity-50"
       />
       {reverseQaAnswered && (
@@ -539,7 +549,7 @@ function InterviewPage() {
       {!reverseQaAnswered ? (
         <button
           onClick={handleGetAnswer}
-          disabled={loadingQuestion || !!questionError || !currentAnswer.trim() || gettingAnswer}
+          disabled={loadingQuestions || !!questionsError || !currentAnswer.trim() || gettingAnswer}
           className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 text-white font-medium py-3 rounded-lg transition"
         >
           {gettingAnswer ? 'Getting answer...' : 'Ask'}
@@ -573,7 +583,7 @@ function InterviewPage() {
         }}
         placeholder={isCodingStage ? '// Write your code here...' : 'Type or speak your answer here...'}
         rows={isCodingStage ? 8 : 4}
-        disabled={loadingQuestion || !!questionError}
+        disabled={loadingQuestions || !!questionsError}
         spellCheck={!isCodingStage}
         className={`w-full p-3 rounded-lg border mb-4 disabled:opacity-50 ${
           isCodingStage
@@ -583,7 +593,7 @@ function InterviewPage() {
       />
       <button
         onClick={handleNext}
-        disabled={loadingQuestion || !!questionError || !currentAnswer.trim()}
+        disabled={loadingQuestions || !!questionsError || !currentAnswer.trim()}
         className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 text-white font-medium py-3 rounded-lg transition"
       >
         {nextButtonLabel}
@@ -629,24 +639,21 @@ function InterviewPage() {
         ? 'flex-1 flex flex-col md:flex-row gap-4 px-6 py-6 max-w-5xl mx-auto w-full'
         : 'flex-1 flex flex-col items-center justify-center px-6 py-8'}
       >
-        {/* Camera is always mounted — recording emotions for the whole interview.
-            When hidden, it's moved off-screen (not shrunk/opacity-0), so browsers
-            don't throttle or pause the video stream. */}
         <div className={showCamera ? 'flex-1 min-h-[320px] md:min-h-0' : 'fixed top-0 -left-[9999px] w-40 h-32 pointer-events-none'}>
           <EmotionWebcam size={showCamera ? 'full' : 'small'} showOverlay={showCamera} onEmotionUpdate={handleEmotionUpdate} />
         </div>
 
         {showCamera ? (
           <div className="w-full md:w-96 flex flex-col justify-center">
-            {stageIndex === 0 && !loadingQuestion && !questionError && (
+            {stageIndex === 0 && !loadingQuestions && !questionsError && (
               <p className="text-sm text-gray-500 dark:text-gray-400 mb-2">{greetingRef.current}, {candidate.name}.</p>
             )}
             <div className="bg-gray-50 dark:bg-gray-800 rounded-xl p-5 min-h-[90px] flex items-center mb-4">
-              {loadingQuestion && <p className="text-gray-500 dark:text-gray-400">Thinking of a question...</p>}
-              {questionError && <p className="text-red-500 text-sm">{questionError}</p>}
-              {!loadingQuestion && !questionError && <p className="text-base font-medium">{currentQuestion}</p>}
+              {loadingQuestions && <p className="text-gray-500 dark:text-gray-400">Preparing your interview questions...</p>}
+              {questionsError && <p className="text-red-500 text-sm">{questionsError}</p>}
+              {!loadingQuestions && !questionsError && <p className="text-base font-medium">{currentQuestion}</p>}
             </div>
-            {!loadingQuestion && !questionError && <div className="mb-3">{micButton}</div>}
+            {!loadingQuestions && !questionsError && <div className="mb-3">{micButton}</div>}
             {voiceError && <p className="text-xs text-red-500 mb-3">{voiceError}</p>}
             {!isVoiceSupported && (
               <p className="text-xs text-gray-400 mb-3">Voice input works best in Chrome or Edge. You can also type your answer below.</p>
@@ -659,19 +666,19 @@ function InterviewPage() {
               <img
                 src={avatarImage}
                 alt="Interviewer"
-                className={`w-28 h-28 rounded-full object-cover border-4 ${(loadingQuestion || isSpeaking) ? 'border-blue-400 animate-pulse' : 'border-transparent'}`}
+                className={`w-28 h-28 rounded-full object-cover border-4 ${(loadingQuestions || isSpeaking) ? 'border-blue-400 animate-pulse' : 'border-transparent'}`}
               />
               <p className="text-sm text-gray-500 dark:text-gray-400 mt-2">{avatarLabel}</p>
             </div>
-            {stageIndex === 0 && !loadingQuestion && !questionError && (
+            {stageIndex === 0 && !loadingQuestions && !questionsError && (
               <p className="text-sm text-gray-500 dark:text-gray-400 mb-2">{greetingRef.current}, {candidate.name}.</p>
             )}
             <div className="bg-gray-50 dark:bg-gray-800 rounded-xl p-6 min-h-[100px] flex items-center justify-center mb-6">
-              {loadingQuestion && <p className="text-gray-500 dark:text-gray-400">Thinking of a question...</p>}
-              {questionError && <p className="text-red-500 text-sm">{questionError}</p>}
-              {!loadingQuestion && !questionError && <p className="text-lg font-medium">{currentQuestion}</p>}
+              {loadingQuestions && <p className="text-gray-500 dark:text-gray-400">Preparing your interview questions...</p>}
+              {questionsError && <p className="text-red-500 text-sm">{questionsError}</p>}
+              {!loadingQuestions && !questionsError && <p className="text-lg font-medium">{currentQuestion}</p>}
             </div>
-            {!loadingQuestion && !questionError && <div className="flex justify-center mb-3">{micButton}</div>}
+            {!loadingQuestions && !questionsError && <div className="flex justify-center mb-3">{micButton}</div>}
             {voiceError && <p className="text-xs text-red-500 mb-3">{voiceError}</p>}
             {!isVoiceSupported && (
               <p className="text-xs text-gray-400 mb-3">Voice input works best in Chrome or Edge. You can also type your answer below.</p>

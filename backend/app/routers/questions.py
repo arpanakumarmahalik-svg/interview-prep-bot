@@ -21,6 +21,15 @@ class QuestionRequest(BaseModel):
     resume_text: str = ""
 
 
+class GenerateAllRequest(BaseModel):
+    branch: str
+    year: str
+    skills: str
+    projects: str
+    target_company: str
+    resume_text: str = ""
+
+
 class AnswerRequest(BaseModel):
     question: str
     target_company: str
@@ -72,6 +81,39 @@ Generate ONE question only. Use the candidate's actual skills/projects where rel
 (not generic questions). Sound like a real human interviewer — natural, professional,
 and conversational. Return ONLY the question text, nothing else (no labels, no quotes,
 no "Question:" prefix).
+"""
+
+
+def build_generate_all_prompt(req: GenerateAllRequest) -> str:
+    stage_list = "\n".join([f'- "{key}": {instr}' for key, instr in STAGE_INSTRUCTIONS.items()])
+
+    return f"""You are a professional interviewer conducting a job interview for {req.target_company}.
+
+Candidate details:
+- Branch: {req.branch}
+- Year: {req.year}
+- Skills: {req.skills}
+- Projects: {req.projects}
+- Resume text: {req.resume_text if req.resume_text else "Not provided"}
+
+Generate ONE question for EACH of the following interview stages, in this exact order:
+{stage_list}
+
+Use the candidate's actual skills/projects where relevant (not generic questions) for the
+stages where that applies. Sound like a real human interviewer — natural, professional,
+and conversational.
+
+Return ONLY valid JSON in exactly this format, no markdown fences, no extra text:
+{{"questions": [
+  {{"stage": "introduction", "question": "..."}},
+  {{"stage": "educational", "question": "..."}},
+  {{"stage": "technical", "question": "..."}},
+  {{"stage": "coding", "question": "..."}},
+  {{"stage": "project", "question": "..."}},
+  {{"stage": "hr", "question": "..."}},
+  {{"stage": "company", "question": "..."}},
+  {{"stage": "reverse_qa", "question": "Do you have any questions for me?"}}
+]}}
 """
 
 
@@ -133,6 +175,17 @@ def generate_question(req: QuestionRequest):
         return {"stage": req.stage, "question": response.text.strip()}
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Gemini error: {str(e)}")
+
+
+@router.post("/generate-all")
+def generate_all_questions(req: GenerateAllRequest):
+    try:
+        prompt = build_generate_all_prompt(req)
+        response = client.models.generate_content(model=MODEL_NAME, contents=prompt)
+        result = parse_json_response(response.text)
+        return {"questions": result.get("questions", [])}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Gemini error: {str(e)}")
 
