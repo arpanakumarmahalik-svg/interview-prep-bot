@@ -37,6 +37,8 @@ const EMOTION_COLORS: Record<string, string> = {
   surprised: '#06b6d4',
 }
 
+const MIN_EMOTION_SAMPLES_FOR_CHART = 5
+
 function ReportPage() {
   const location = useLocation()
   const navigate = useNavigate()
@@ -82,11 +84,16 @@ function ReportPage() {
     )
   }
 
-  const scoredStages = report.transcript.filter(t => t.score !== null)
-  const chartData = report.emotionSamples.map(s => ({ t: s.t, ...s.expressions }))
-  const emotionKeys = report.emotionSamples.length > 0 ? Object.keys(report.emotionSamples[0].expressions) : []
+  // Show every answered question, even ones without a score — instead of hiding them.
+  const answeredStages = report.transcript.filter(t => t.stage !== 'reverse_qa')
+  const hasAnyScores = answeredStages.some(t => t.score !== null)
+
+  const emotionSamples = report.emotionSamples
+  const hasEnoughEmotionData = emotionSamples.length >= MIN_EMOTION_SAMPLES_FOR_CHART
+  const chartData = emotionSamples.map(s => ({ t: s.t, ...s.expressions }))
+  const emotionKeys = emotionSamples.length > 0 ? Object.keys(emotionSamples[0].expressions) : []
   const distributionData = emotionKeys.map(key => {
-    const avg = report.emotionSamples.reduce((sum, s) => sum + (s.expressions[key] || 0), 0) / report.emotionSamples.length
+    const avg = emotionSamples.reduce((sum, s) => sum + (s.expressions[key] || 0), 0) / emotionSamples.length
     return { emotion: key, value: Math.round(avg * 100) }
   })
 
@@ -101,7 +108,7 @@ function ReportPage() {
           <span className="text-sm text-gray-500">{report.targetCompany}</span>
         </div>
 
-        <div className="flex justify-between items-end mb-8">
+        <div className="flex justify-between items-end mb-2">
           <h1 className="text-3xl font-bold">Session Report</h1>
           <div className="text-right">
             <p className="text-xs text-gray-500 uppercase">Overall</p>
@@ -111,7 +118,22 @@ function ReportPage() {
           </div>
         </div>
 
-        {report.emotionSamples.length > 0 ? (
+        {report.overallScore === null && (
+          <p className="text-sm text-amber-500 mb-8">
+            Scoring wasn't available for this session (the AI evaluation step didn't complete — this can
+            happen if the daily AI limit was reached). Your answers are still saved below.
+          </p>
+        )}
+
+        {emotionSamples.length === 0 ? (
+          <p className="text-sm text-gray-400 mb-10">Camera wasn't used during this session, so no emotion data is available.</p>
+        ) : !hasEnoughEmotionData ? (
+          <p className="text-sm text-gray-400 mb-10">
+            Only a little emotion data was captured this session — this usually means the camera had
+            trouble clearly seeing a face (low light, poor camera quality, or the face not fully in
+            frame), not an issue with the report itself.
+          </p>
+        ) : (
           <div className="grid md:grid-cols-2 gap-6 mb-10">
             <div className="border border-gray-200 dark:border-gray-800 rounded-xl p-5">
               <h3 className="font-semibold mb-3">Emotion timeline</h3>
@@ -145,33 +167,44 @@ function ReportPage() {
               </ResponsiveContainer>
             </div>
           </div>
-        ) : (
-          <p className="text-sm text-gray-400 mb-10">Camera wasn't used during this session, so no emotion data is available.</p>
         )}
 
         <div className="grid md:grid-cols-2 gap-6 mb-10">
           <div className="border border-gray-200 dark:border-gray-800 rounded-xl p-5">
             <h3 className="font-semibold mb-3 text-green-600 dark:text-green-400">Strengths</h3>
-            <ul className="text-sm space-y-2 list-disc list-inside">
-              {report.strengths.map((s, i) => <li key={i}>{s}</li>)}
-            </ul>
+            {report.strengths.length > 0 ? (
+              <ul className="text-sm space-y-2 list-disc list-inside">
+                {report.strengths.map((s, i) => <li key={i}>{s}</li>)}
+              </ul>
+            ) : (
+              <p className="text-sm text-gray-400">Not available for this session.</p>
+            )}
           </div>
           <div className="border border-gray-200 dark:border-gray-800 rounded-xl p-5">
             <h3 className="font-semibold mb-3 text-amber-600 dark:text-amber-400">Areas to improve</h3>
-            <ul className="text-sm space-y-2 list-disc list-inside">
-              {report.improvements.map((s, i) => <li key={i}>{s}</li>)}
-            </ul>
+            {report.improvements.length > 0 ? (
+              <ul className="text-sm space-y-2 list-disc list-inside">
+                {report.improvements.map((s, i) => <li key={i}>{s}</li>)}
+              </ul>
+            ) : (
+              <p className="text-sm text-gray-400">Not available for this session.</p>
+            )}
           </div>
         </div>
 
         <h2 className="text-xl font-bold mb-4">Question-by-question breakdown</h2>
+        {!hasAnyScores && (
+          <p className="text-sm text-gray-400 mb-4">
+            Scores weren't generated for this session, but here's the full transcript.
+          </p>
+        )}
         <div className="space-y-4 mb-10">
-          {scoredStages.map((item, i) => (
+          {answeredStages.map((item, i) => (
             <div key={i} className="border border-gray-200 dark:border-gray-800 rounded-xl p-5">
               <div className="flex justify-between items-start mb-2">
                 <p className="text-xs uppercase text-gray-500">{item.stage.replace('_', ' ')}</p>
                 <span className="text-sm font-bold bg-blue-50 dark:bg-blue-900/30 text-blue-600 dark:text-blue-300 px-2 py-1 rounded">
-                  {item.score}/100
+                  {item.score !== null ? `${item.score}/100` : 'N/A'}
                 </span>
               </div>
               <p className="font-medium mb-2">{item.question}</p>
