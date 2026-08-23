@@ -155,7 +155,14 @@ function ReportPage() {
               <ResponsiveContainer width="100%" height={220}>
                 <BarChart data={distributionData}>
                   <CartesianGrid strokeDasharray="3 3" opacity={0.2} />
-                  <XAxis dataKey="emotion" tick={{ fontSize: 10 }} />
+                                    <XAxis
+                    dataKey="emotion"
+                    tick={{ fontSize: 9 }}
+                    interval={0}
+                    angle={-25}
+                    textAnchor="end"
+                    height={40}
+                  />
                   <YAxis domain={[0, 100]} tick={{ fontSize: 10 }} />
                   <Tooltip />
                   <Bar dataKey="value">
