@@ -1,5 +1,6 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { useCheatLock } from '../hooks/useCheatLock'
 import tcsIonLogo from '../assets/logos/tcs-ion.png'
 import infosysLogo from '../assets/logos/infosys.jpg'
 import wiproLogo from '../assets/logos/wipro.png'
@@ -27,6 +28,14 @@ const MAX_FILE_SIZE_MB = 5
 
 function FormPage() {
   const navigate = useNavigate()
+  const { lockedUntil, loading: lockLoading } = useCheatLock()
+  const [, forceTick] = useState(0)
+
+  useEffect(() => {
+    if (!lockedUntil) return
+    const t = setInterval(() => forceTick(x => x + 1), 1000)
+    return () => clearInterval(t)
+  }, [lockedUntil])
 
   const [formData, setFormData] = useState({
     name: '', gender: '', branch: '', year: '', skills: '', projects: '',
@@ -89,7 +98,32 @@ function FormPage() {
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
-    navigate('/emotion-check', { state: { ...formData, targetCompany, resumeText } })
+    navigate('/emotion-check', {
+      state: { ...formData, targetCompany, resumeText }
+    })
+  }
+
+  if (lockLoading) return null
+
+  if (lockedUntil) {
+    const msLeft = lockedUntil.getTime() - Date.now()
+    const hours = Math.max(0, Math.floor(msLeft / 3600000))
+    const minutes = Math.max(0, Math.floor((msLeft % 3600000) / 60000))
+    const seconds = Math.max(0, Math.floor((msLeft % 60000) / 1000))
+
+    return (
+      <div className="min-h-screen bg-white dark:bg-gray-900 text-gray-900 dark:text-white flex flex-col items-center justify-center px-6 text-center">
+        <div className="text-5xl mb-4">🔒</div>
+        <h1 className="text-2xl font-bold mb-2">Interview access temporarily locked</h1>
+        <p className="text-gray-500 dark:text-gray-400 max-w-md mb-4">
+          A previous session was ended for leaving fullscreen or switching tabs during the interview.
+          You can start a new interview once the lock expires.
+        </p>
+        <p className="text-3xl font-mono font-bold text-red-500">
+          {hours}h {minutes}m {seconds}s
+        </p>
+      </div>
+    )
   }
 
   return (

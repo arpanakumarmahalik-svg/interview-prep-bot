@@ -5,10 +5,12 @@ import interviewerFemale from '../assets/avatars/interviewer-female.jpg'
 import EmotionWebcam from '../components/EmotionWebcam'
 import { supabase } from '../lib/supabaseClient'
 import { useAuth } from '../context/AuthContext'
+import { useCheatLock } from '../hooks/useCheatLock'
 
 const API_URL = import.meta.env.VITE_API_URL
 const INTERVIEW_DURATION_SECONDS = 30 * 60
 const CLOSING_MESSAGE = "It was nice talking to you and we'll get back to you soon."
+const LOCKOUT_HOURS = 3
 
 const STAGES = [
   { key: 'introduction', label: 'Introduction' },
@@ -154,13 +156,17 @@ function InterviewPage() {
   const navigate = useNavigate()
   const { user } = useAuth()
   const candidate = location.state as CandidateData | null
+  const { lockedUntil, createLock } = useCheatLock()
+
+  const [hasStarted, setHasStarted] = useState(false)
+  const [startError, setStartError] = useState('')
+  const [violation, setViolation] = useState(false)
 
   const [stageIndex, setStageIndex] = useState(0)
   const [currentQuestion, setCurrentQuestion] = useState('')
   const [currentAnswer, setCurrentAnswer] = useState('')
   const [answers, setAnswers] = useState<AnswerRecord[]>([])
 
-  // All 8 questions are fetched ONCE, up front — this is the key change that cuts API usage.
   const [allQuestions, setAllQuestions] = useState<QAItem[]>([])
   const [loadingQuestions, setLoadingQuestions] = useState(true)
   const [questionsError, setQuestionsError] = useState('')
@@ -197,7 +203,11 @@ function InterviewPage() {
   }, [candidate, navigate])
 
   useEffect(() => {
-    if (!candidate) return
+    if (lockedUntil) navigate('/form')
+  }, [lockedUntil, navigate])
+
+  useEffect(() => {
+    if (!candidate || !hasStarted) return
     let cancelled = false
     pitchRef.current = pitchForGender(candidate.gender)
     getVoices().then(voices => {
@@ -206,19 +216,16 @@ function InterviewPage() {
       setVoiceReady(true)
     })
     return () => { cancelled = true }
-  }, [candidate])
+  }, [candidate, hasStarted])
 
-  // Fetch ALL 8 questions in one Gemini call, once, as soon as the voice is ready
   useEffect(() => {
-    if (!candidate || !voiceReady || allQuestions.length > 0) return
+    if (!candidate || !hasStarted || isFinished || allQuestions.length > 0) return
     fetchAllQuestions()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [candidate, voiceReady])
+  }, [candidate, hasStarted, voiceReady])
 
-  // Speak/display the question for the current stage whenever the stage changes
-  // (no network call here — the question is already sitting in allQuestions)
   useEffect(() => {
-    if (!candidate || isFinished || allQuestions.length === 0) return
+    if (!candidate || !hasStarted || isFinished || allQuestions.length === 0) return
     const q = allQuestions[stageIndex]
     if (!q) return
     setCurrentQuestion(q.question)
@@ -231,10 +238,10 @@ function InterviewPage() {
       speak(textToSpeak, selectedVoiceRef.current, pitchRef.current, () => setIsSpeaking(false))
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [stageIndex, allQuestions])
+  }, [stageIndex, allQuestions, hasStarted])
 
   useEffect(() => {
-    if (!candidate || isFinished) return
+    if (!candidate || !hasStarted || isFinished) return
     const timer = setInterval(() => {
       setSecondsLeft(prev => {
         if (prev <= 1) {
@@ -247,7 +254,7 @@ function InterviewPage() {
     }, 1000)
     return () => clearInterval(timer)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [candidate, isFinished])
+  }, [candidate, hasStarted, isFinished])
 
   useEffect(() => {
     return () => {
@@ -255,6 +262,56 @@ function InterviewPage() {
       stopSpeaking()
     }
   }, [stageIndex])
+
+  useEffect(() => {
+    if (!hasStarted || isFinished || violation) return
+
+    const handleViolation = () => {
+      if (isFinished || violation) return
+      recordViolation()
+    }
+
+    const onVisibilityChange = () => {
+      if (document.hidden) handleViolation()
+    }
+    const onFullscreenChange = () => {
+      if (!document.fullscreenElement) handleViolation()
+    }
+
+    document.addEventListener('visibilitychange', onVisibilityChange)
+    document.addEventListener('fullscreenchange', onFullscreenChange)
+
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibilityChange)
+      document.removeEventListener('fullscreenchange', onFullscreenChange)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hasStarted, isFinished, violation])
+
+  const recordViolation = async () => {
+    setViolation(true)
+    setIsFinished(true)
+    if (isListening) stopListening()
+    stopSpeaking()
+    await createLock(LOCKOUT_HOURS, 'Left fullscreen or switched tabs during the interview')
+    if (document.fullscreenElement) {
+      document.exitFullscreen().catch(() => {})
+    }
+  }
+
+  const beginInterview = async () => {
+    setStartError('')
+    try {
+      if (document.documentElement.requestFullscreen) {
+        await document.documentElement.requestFullscreen()
+      }
+    } catch {
+      setStartError('Fullscreen is required to start the interview. Please allow fullscreen and try again.')
+      return
+    }
+    startTimeRef.current = Date.now()
+    setHasStarted(true)
+  }
 
   const handleEmotionUpdate = (expressions: Record<string, number>) => {
     emotionSamplesRef.current.push({
@@ -410,6 +467,7 @@ function InterviewPage() {
     if (isListening) stopListening()
     let transcript = finalAnswers ?? answers
     setIsFinished(true)
+    if (document.fullscreenElement) document.exitFullscreen().catch(() => {})
     if (!isMuted) speak(CLOSING_MESSAGE, selectedVoiceRef.current, pitchRef.current)
 
     if (!candidate) return
@@ -493,6 +551,49 @@ function InterviewPage() {
   }
 
   if (!candidate) return null
+
+  if (violation) {
+    return (
+      <div className="min-h-screen bg-white dark:bg-gray-900 text-gray-900 dark:text-white flex flex-col items-center justify-center px-6 text-center">
+        <div className="text-5xl mb-4">👋</div>
+        <p className="text-xl font-medium max-w-md mb-2">
+          We'll be ending the interview here. Thank you for your time.
+        </p>
+        <p className="text-sm text-gray-400 max-w-md mb-6">
+          New interviews are locked for {LOCKOUT_HOURS} hours.
+        </p>
+        <button
+          onClick={() => navigate('/form')}
+          className="bg-gray-200 dark:bg-gray-800 px-6 py-3 rounded-lg font-medium"
+        >
+          Back to Form
+        </button>
+      </div>
+    )
+  }
+
+  if (!hasStarted) {
+    return (
+      <div className="min-h-screen bg-white dark:bg-gray-900 text-gray-900 dark:text-white flex flex-col items-center justify-center px-6 text-center">
+        <div className="text-5xl mb-4">🖥️</div>
+        <h1 className="text-2xl font-bold mb-2">Ready to begin?</h1>
+        <p className="text-gray-500 dark:text-gray-400 max-w-md mb-2">
+          This interview runs in fullscreen. Your camera will be used to track confidence throughout —
+          you can choose to view it, but it stays on either way, just like a real proctored exam.
+        </p>
+        <p className="text-gray-500 dark:text-gray-400 max-w-md mb-6">
+          Leaving fullscreen or switching tabs/apps will end the session and lock new interviews for {LOCKOUT_HOURS} hours.
+        </p>
+        {startError && <p className="text-red-500 text-sm mb-4">{startError}</p>}
+        <button
+          onClick={beginInterview}
+          className="bg-blue-600 hover:bg-blue-700 text-white font-medium px-8 py-3 rounded-lg transition"
+        >
+          Enter Fullscreen & Begin Interview
+        </button>
+      </div>
+    )
+  }
 
   if (isFinished) {
     return (
