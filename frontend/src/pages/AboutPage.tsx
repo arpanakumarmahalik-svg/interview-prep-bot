@@ -51,6 +51,14 @@ function WhyItem({ text, delay }: { text: string; delay: number }) {
   )
 }
 
+const SAMPLE_BARS = [
+  { label: 'Happy', height: 35, color: 'bg-green-400' },
+  { label: 'Neutral', height: 80, color: 'bg-indigo-400' },
+  { label: 'Sad', height: 10, color: 'bg-sky-400' },
+  { label: 'Fearful', height: 20, color: 'bg-amber-400' },
+  { label: 'Surprised', height: 15, color: 'bg-cyan-400' },
+]
+
 function AboutPage() {
   const { user } = useAuth()
   const navigate = useNavigate()
@@ -164,17 +172,17 @@ function AboutPage() {
           <div className="grid sm:grid-cols-2 gap-6">
             <div>
               <p className="text-xs text-gray-400 uppercase mb-3">Emotion Distribution</p>
-              <div className="flex items-end gap-2 h-24">
-                {[
-                  { label: 'Happy', h: '35%', color: 'bg-green-400' },
-                  { label: 'Neutral', h: '80%', color: 'bg-indigo-400' },
-                  { label: 'Sad', h: '10%', color: 'bg-sky-400' },
-                  { label: 'Fearful', h: '20%', color: 'bg-amber-400' },
-                  { label: 'Surprised', h: '15%', color: 'bg-cyan-400' },
-                ].map(bar => (
-                  <div key={bar.label} className="flex-1 flex flex-col items-center gap-1">
-                    <div className={`w-full rounded-t ${bar.color}`} style={{ height: bar.h }} />
-                    <span className="text-[9px] text-gray-400">{bar.label}</span>
+              {/* Fixed-height bar chart container: each bar's percentage height needs an
+                  ancestor with an explicit pixel height to resolve against — h-28 here,
+                  and h-full on the column below, so the percentages actually render. */}
+              <div className="flex items-end gap-3 h-28 bg-gray-50 dark:bg-gray-800/50 rounded-lg p-3">
+                {SAMPLE_BARS.map(bar => (
+                  <div key={bar.label} className="flex-1 h-full flex flex-col justify-end items-center gap-1">
+                    <div
+                      className={`w-full rounded-t ${bar.color}`}
+                      style={{ height: `${bar.height}%`, minHeight: '4px' }}
+                    />
+                    <span className="text-[9px] text-gray-400 whitespace-nowrap">{bar.label}</span>
                   </div>
                 ))}
               </div>
