@@ -51,12 +51,15 @@ function WhyItem({ text, delay }: { text: string; delay: number }) {
   )
 }
 
+// Fixed pixel heights (out of a 96px-tall chart) instead of percentages — avoids any
+// ambiguity with percentage-height resolution inside flex containers across browsers.
+const CHART_HEIGHT_PX = 96
 const SAMPLE_BARS = [
-  { label: 'Happy', height: 35, color: 'bg-green-400' },
-  { label: 'Neutral', height: 80, color: 'bg-indigo-400' },
-  { label: 'Sad', height: 10, color: 'bg-sky-400' },
-  { label: 'Fearful', height: 20, color: 'bg-amber-400' },
-  { label: 'Surprised', height: 15, color: 'bg-cyan-400' },
+  { label: 'Happy', heightPx: 34, color: '#4ade80' },
+  { label: 'Neutral', heightPx: 77, color: '#818cf8' },
+  { label: 'Sad', heightPx: 10, color: '#38bdf8' },
+  { label: 'Fearful', heightPx: 19, color: '#fbbf24' },
+  { label: 'Surprised', heightPx: 14, color: '#22d3ee' },
 ]
 
 function AboutPage() {
@@ -172,15 +175,15 @@ function AboutPage() {
           <div className="grid sm:grid-cols-2 gap-6">
             <div>
               <p className="text-xs text-gray-400 uppercase mb-3">Emotion Distribution</p>
-              {/* Fixed-height bar chart container: each bar's percentage height needs an
-                  ancestor with an explicit pixel height to resolve against — h-28 here,
-                  and h-full on the column below, so the percentages actually render. */}
-              <div className="flex items-end gap-3 h-28 bg-gray-50 dark:bg-gray-800/50 rounded-lg p-3">
+              <div
+                className="flex items-end gap-3 rounded-lg p-3 bg-gray-50 dark:bg-gray-800/50"
+                style={{ height: `${CHART_HEIGHT_PX + 24}px` }}
+              >
                 {SAMPLE_BARS.map(bar => (
-                  <div key={bar.label} className="flex-1 h-full flex flex-col justify-end items-center gap-1">
+                  <div key={bar.label} className="flex-1 flex flex-col justify-end items-center gap-1">
                     <div
-                      className={`w-full rounded-t ${bar.color}`}
-                      style={{ height: `${bar.height}%`, minHeight: '4px' }}
+                      className="w-full rounded-t"
+                      style={{ height: `${bar.heightPx}px`, backgroundColor: bar.color }}
                     />
                     <span className="text-[9px] text-gray-400 whitespace-nowrap">{bar.label}</span>
                   </div>
