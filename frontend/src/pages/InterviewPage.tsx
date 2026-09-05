@@ -65,10 +65,6 @@ function formatTime(totalSeconds: number): string {
   return `${minutes}:${seconds.toString().padStart(2, '0')}`
 }
 
-// Speaking a silent utterance synchronously, inside the click handler that triggers
-// fullscreen, "unlocks" the browser's speech engine for the rest of the session.
-// Without this, requesting fullscreen consumes the click's permission before the
-// real question is spoken a moment later, and the browser silently blocks the audio.
 function unlockSpeechSynthesis() {
   if (!('speechSynthesis' in window)) return
   try {
@@ -77,7 +73,7 @@ function unlockSpeechSynthesis() {
     primer.volume = 0
     window.speechSynthesis.speak(primer)
   } catch {
-    // ignore — if this fails, normal speak() calls later will just behave as before
+    // ignore
   }
 }
 
@@ -129,20 +125,45 @@ function pitchForGender(gender: string): number {
   return gender === 'female' ? 1.25 : 0.8
 }
 
-function speak(text: string, voice: SpeechSynthesisVoice | null, pitch: number, onEnd?: () => void) {
-  if (!('speechSynthesis' in window)) return
+// Kept at module scope so the utterance object can't be garbage-collected mid-speech —
+// a known Chrome bug where speech silently stops if the utterance isn't referenced anywhere.
+let activeUtterance: SpeechSynthesisUtterance | null = null
+
+function speak(
+  text: string,
+  voice: SpeechSynthesisVoice | null,
+  pitch: number,
+  onEnd?: () => void,
+  onError?: (msg: string) => void
+) {
+  if (!('speechSynthesis' in window)) {
+    onError?.('This browser does not support text-to-speech.')
+    return
+  }
   window.speechSynthesis.cancel()
+
   const utterance = new SpeechSynthesisUtterance(text)
   utterance.lang = 'en-IN'
   utterance.rate = 1
   utterance.pitch = pitch
   if (voice) utterance.voice = voice
-  if (onEnd) utterance.onend = onEnd
+  utterance.onend = () => {
+    activeUtterance = null
+    onEnd?.()
+  }
+  utterance.onerror = (e: any) => {
+    activeUtterance = null
+    onEnd?.()
+    onError?.(`Voice playback error: ${e?.error || 'unknown'}`)
+  }
+
+  activeUtterance = utterance
   window.speechSynthesis.speak(utterance)
 }
 
 function stopSpeaking() {
   if ('speechSynthesis' in window) window.speechSynthesis.cancel()
+  activeUtterance = null
 }
 
 function getFriendlyErrorMessage(rawError: string): string {
@@ -199,6 +220,8 @@ function InterviewPage() {
   const selectedVoiceRef = useRef<SpeechSynthesisVoice | null>(null)
   const pitchRef = useRef<number>(1)
   const [voiceReady, setVoiceReady] = useState(false)
+  const [noVoicesAvailable, setNoVoicesAvailable] = useState(false)
+  const [ttsError, setTtsError] = useState('')
 
   const [isListening, setIsListening] = useState(false)
   const [voiceError, setVoiceError] = useState('')
@@ -228,11 +251,27 @@ function InterviewPage() {
     pitchRef.current = pitchForGender(candidate.gender)
     getVoices().then(voices => {
       if (cancelled) return
+      if (voices.length === 0) {
+        setNoVoicesAvailable(true)
+      }
       selectedVoiceRef.current = pickVoiceForGender(voices, candidate.gender)
       setVoiceReady(true)
     })
     return () => { cancelled = true }
   }, [candidate, hasStarted])
+
+  // Chrome has a known bug where speechSynthesis silently pauses itself after ~15s
+  // of continuous speaking, or after a fullscreen/visibility change. Nudging resume()
+  // repeatedly while something is supposed to be speaking works around it.
+  useEffect(() => {
+    if (!isSpeaking) return
+    const watchdog = setInterval(() => {
+      if ('speechSynthesis' in window && window.speechSynthesis.speaking) {
+        window.speechSynthesis.resume()
+      }
+    }, 2000)
+    return () => clearInterval(watchdog)
+  }, [isSpeaking])
 
   useEffect(() => {
     if (!candidate || !hasStarted || isFinished || allQuestions.length > 0) return
@@ -251,7 +290,14 @@ function InterviewPage() {
         ? `${greetingRef.current}, ${candidate.name}. ${q.question}`
         : q.question
       setIsSpeaking(true)
-      speak(textToSpeak, selectedVoiceRef.current, pitchRef.current, () => setIsSpeaking(false))
+      setTtsError('')
+      speak(
+        textToSpeak,
+        selectedVoiceRef.current,
+        pitchRef.current,
+        () => setIsSpeaking(false),
+        (msg) => { setIsSpeaking(false); setTtsError(msg) }
+      )
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [stageIndex, allQuestions, hasStarted])
@@ -317,9 +363,6 @@ function InterviewPage() {
 
   const beginInterview = async () => {
     setStartError('')
-
-    // Must happen synchronously, inside this click handler, before any "await" —
-    // this is what actually unlocks audio for the rest of the session.
     unlockSpeechSynthesis()
 
     try {
@@ -453,7 +496,13 @@ function InterviewPage() {
 
       if (!isMuted) {
         setIsSpeaking(true)
-        speak(data.answer, selectedVoiceRef.current, pitchRef.current, () => setIsSpeaking(false))
+        speak(
+          data.answer,
+          selectedVoiceRef.current,
+          pitchRef.current,
+          () => setIsSpeaking(false),
+          (msg) => { setIsSpeaking(false); setTtsError(msg) }
+        )
       }
     } catch (err) {
       setReverseQaAnswer(err instanceof Error ? err.message : getFriendlyErrorMessage(''))
@@ -753,6 +802,19 @@ function InterviewPage() {
     </div>
   )
 
+  const voiceWarnings = (
+    <>
+      {noVoicesAvailable && (
+        <p className="text-xs text-amber-500 mb-2">
+          No text-to-speech voice was found on this device — questions will be shown as text only.
+        </p>
+      )}
+      {ttsError && (
+        <p className="text-xs text-red-500 mb-2">{ttsError}</p>
+      )}
+    </>
+  )
+
   return (
     <div className="min-h-screen bg-white dark:bg-gray-900 text-gray-900 dark:text-white flex flex-col">
       {topBar}
@@ -770,6 +832,7 @@ function InterviewPage() {
             {stageIndex === 0 && !loadingQuestions && !questionsError && (
               <p className="text-sm text-gray-500 dark:text-gray-400 mb-2">{greetingRef.current}, {candidate.name}.</p>
             )}
+            {voiceWarnings}
             <div className="bg-gray-50 dark:bg-gray-800 rounded-xl p-5 min-h-[90px] flex items-center mb-4">
               {loadingQuestions && <p className="text-gray-500 dark:text-gray-400">Preparing your interview questions...</p>}
               {questionsError && <p className="text-red-500 text-sm">{questionsError}</p>}
@@ -795,6 +858,7 @@ function InterviewPage() {
             {stageIndex === 0 && !loadingQuestions && !questionsError && (
               <p className="text-sm text-gray-500 dark:text-gray-400 mb-2">{greetingRef.current}, {candidate.name}.</p>
             )}
+            {voiceWarnings}
             <div className="bg-gray-50 dark:bg-gray-800 rounded-xl p-6 min-h-[100px] flex items-center justify-center mb-6">
               {loadingQuestions && <p className="text-gray-500 dark:text-gray-400">Preparing your interview questions...</p>}
               {questionsError && <p className="text-red-500 text-sm">{questionsError}</p>}
