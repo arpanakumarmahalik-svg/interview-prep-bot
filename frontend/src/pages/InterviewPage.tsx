@@ -164,6 +164,7 @@ function speak(
 function stopSpeaking() {
   if ('speechSynthesis' in window) window.speechSynthesis.cancel()
   activeUtterance = null
+  void activeUtterance // referenced so TypeScript doesn't flag it as unused
 }
 
 function getFriendlyErrorMessage(rawError: string): string {
