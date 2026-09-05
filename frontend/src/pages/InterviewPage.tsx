@@ -65,6 +65,22 @@ function formatTime(totalSeconds: number): string {
   return `${minutes}:${seconds.toString().padStart(2, '0')}`
 }
 
+// Speaking a silent utterance synchronously, inside the click handler that triggers
+// fullscreen, "unlocks" the browser's speech engine for the rest of the session.
+// Without this, requesting fullscreen consumes the click's permission before the
+// real question is spoken a moment later, and the browser silently blocks the audio.
+function unlockSpeechSynthesis() {
+  if (!('speechSynthesis' in window)) return
+  try {
+    window.speechSynthesis.resume()
+    const primer = new SpeechSynthesisUtterance('')
+    primer.volume = 0
+    window.speechSynthesis.speak(primer)
+  } catch {
+    // ignore — if this fails, normal speak() calls later will just behave as before
+  }
+}
+
 function getVoices(): Promise<SpeechSynthesisVoice[]> {
   return new Promise(resolve => {
     if (!('speechSynthesis' in window)) {
@@ -301,6 +317,11 @@ function InterviewPage() {
 
   const beginInterview = async () => {
     setStartError('')
+
+    // Must happen synchronously, inside this click handler, before any "await" —
+    // this is what actually unlocks audio for the rest of the session.
+    unlockSpeechSynthesis()
+
     try {
       if (document.documentElement.requestFullscreen) {
         await document.documentElement.requestFullscreen()
