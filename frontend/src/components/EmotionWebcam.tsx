@@ -23,6 +23,17 @@ function EmotionWebcam({ size = 'large', showOverlay = false, onEmotionUpdate }:
 
     const setup = async () => {
       try {
+        // Try the fast GPU backend first, but fall back to CPU quietly if the
+        // device/browser doesn't support WebGL — avoids a red console error
+        // and just runs slightly slower instead of failing.
+        try {
+          await faceapi.tf.setBackend('webgl')
+          await faceapi.tf.ready()
+        } catch {
+          await faceapi.tf.setBackend('cpu')
+          await faceapi.tf.ready()
+        }
+
         await Promise.all([
           faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL),
           faceapi.nets.faceExpressionNet.loadFromUri(MODEL_URL),
@@ -48,8 +59,6 @@ function EmotionWebcam({ size = 'large', showOverlay = false, onEmotionUpdate }:
   useEffect(() => {
     if (!modelsLoaded) return
 
-    // Smaller inputSize + 1s interval instead of 700ms — noticeably lighter on weaker CPUs,
-    // while still frequent enough for a smooth confidence trend in the report.
     const detectorOptions = new faceapi.TinyFaceDetectorOptions({ inputSize: 224, scoreThreshold: 0.5 })
 
     const interval = window.setInterval(async () => {

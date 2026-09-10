@@ -149,7 +149,8 @@ Then, based on the candidate's OVERALL performance across all stages, list:
 - 3 to 4 specific strengths
 - 3 to 4 specific areas to improve
 
-Return ONLY valid JSON in exactly this format, no markdown fences, no extra text:
+Respond with ONLY a single JSON object and nothing else. No markdown code fences, no
+explanation before or after, no trailing commas. Use exactly this shape:
 {{
   "scores": [{{"stage": "...", "score": <0-100>, "feedback": "..."}}],
   "strengths": ["...", "..."],
@@ -164,6 +165,11 @@ def parse_json_response(text: str) -> dict:
     cleaned = text.strip()
     cleaned = re.sub(r"^```(json)?", "", cleaned).strip()
     cleaned = re.sub(r"```$", "", cleaned).strip()
+    # Some responses can include stray text before/after the JSON object —
+    # extract just the outermost {...} block if present.
+    match = re.search(r"\{.*\}", cleaned, re.DOTALL)
+    if match:
+        cleaned = match.group(0)
     return json.loads(cleaned)
 
 
@@ -202,14 +208,28 @@ def answer_question(req: AnswerRequest):
 
 @router.post("/evaluate")
 def evaluate_interview(req: EvaluateRequest):
-    try:
-        prompt = build_evaluate_prompt(req)
-        response = client.models.generate_content(model=MODEL_NAME, contents=prompt)
-        result = parse_json_response(response.text)
-        return {
-            "scores": result.get("scores", []),
-            "strengths": result.get("strengths", []),
-            "improvements": result.get("improvements", [])
-        }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Gemini error: {str(e)}")
+    """
+    Evaluates the interview. Tries up to 2 times if Gemini's output isn't valid JSON.
+    If it still fails after retrying, returns an empty-but-successful response (200)
+    instead of a 500 — the report page already handles empty scores gracefully with
+    a friendly message, so this avoids ever showing a hard server error to the user.
+    """
+    prompt = build_evaluate_prompt(req)
+    last_error = None
+
+    for attempt in range(2):
+        try:
+            response = client.models.generate_content(model=MODEL_NAME, contents=prompt)
+            result = parse_json_response(response.text)
+            return {
+                "scores": result.get("scores", []),
+                "strengths": result.get("strengths", []),
+                "improvements": result.get("improvements", [])
+            }
+        except Exception as e:
+            last_error = e
+            continue
+
+    # Both attempts failed — log server-side for debugging, but don't break the report page.
+    print(f"[evaluate] Failed after 2 attempts: {last_error}")
+    return {"scores": [], "strengths": [], "improvements": []}
