@@ -154,6 +154,10 @@ function speak(
   utterance.onerror = (e: any) => {
     activeUtterance = null
     onEnd?.()
+    // "interrupted" and "canceled" fire whenever we intentionally call cancel()
+    // to stop a previous utterance (e.g. moving to the next question, muting) —
+    // these are expected, not real failures, so don't show them as errors.
+    if (e?.error === 'interrupted' || e?.error === 'canceled') return
     onError?.(`Voice playback error: ${e?.error || 'unknown'}`)
   }
 

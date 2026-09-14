@@ -23,16 +23,16 @@ function EmotionWebcam({ size = 'large', showOverlay = false, onEmotionUpdate }:
 
     const setup = async () => {
       try {
-        // Try the fast GPU backend first, but fall back to CPU quietly if the
-        // device/browser doesn't support WebGL — avoids a red console error
-        // and just runs slightly slower instead of failing.
-        try {
-          await faceapi.tf.setBackend('webgl')
-          await faceapi.tf.ready()
-        } catch {
-          await faceapi.tf.setBackend('cpu')
-          await faceapi.tf.ready()
-        }
+        // Check WebGL support directly before ever asking tf.js to use it —
+        // this avoids tf.js's own internal console.error logging that fires
+        // even when our try/catch successfully falls back to CPU.
+        const canvas = document.createElement('canvas')
+        const hasWebGL = !!(
+          canvas.getContext('webgl') || canvas.getContext('experimental-webgl')
+        )
+
+        await faceapi.tf.setBackend(hasWebGL ? 'webgl' : 'cpu')
+        await faceapi.tf.ready()
 
         await Promise.all([
           faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL),
