@@ -65,6 +65,12 @@ function formatTime(totalSeconds: number): string {
   return `${minutes}:${seconds.toString().padStart(2, '0')}`
 }
 
+// Collapses immediate repeated words (case-insensitive) — a safety net against
+// duplicate/echoed transcript segments, e.g. "good good good morning morning" -> "good morning".
+function collapseRepeatedWords(text: string): string {
+  return text.replace(/\b(\w+)(\s+\1\b)+/gi, '$1')
+}
+
 function unlockSpeechSynthesis() {
   if (!('speechSynthesis' in window)) return
   try {
@@ -125,8 +131,6 @@ function pitchForGender(gender: string): number {
   return gender === 'female' ? 1.25 : 0.8
 }
 
-// Kept at module scope so the utterance object can't be garbage-collected mid-speech —
-// a known Chrome bug where speech silently stops if the utterance isn't referenced anywhere.
 let activeUtterance: SpeechSynthesisUtterance | null = null
 
 function speak(
@@ -154,9 +158,6 @@ function speak(
   utterance.onerror = (e: any) => {
     activeUtterance = null
     onEnd?.()
-    // "interrupted" and "canceled" fire whenever we intentionally call cancel()
-    // to stop a previous utterance (e.g. moving to the next question, muting) —
-    // these are expected, not real failures, so don't show them as errors.
     if (e?.error === 'interrupted' || e?.error === 'canceled') return
     onError?.(`Voice playback error: ${e?.error || 'unknown'}`)
   }
@@ -168,7 +169,7 @@ function speak(
 function stopSpeaking() {
   if ('speechSynthesis' in window) window.speechSynthesis.cancel()
   activeUtterance = null
-  void activeUtterance // referenced so TypeScript doesn't flag it as unused
+  void activeUtterance
 }
 
 function getFriendlyErrorMessage(rawError: string): string {
@@ -231,6 +232,10 @@ function InterviewPage() {
   const [isListening, setIsListening] = useState(false)
   const [voiceError, setVoiceError] = useState('')
   const recognitionRef = useRef<any>(null)
+  // Every startListening() call gets a unique id. Callbacks from a stale/old recognition
+  // instance (e.g. one still finishing up during a retry) check this before touching state,
+  // so two overlapping instances can never both write to the answer box at once.
+  const recognitionIdRef = useRef(0)
 
   const [isMuted, setIsMuted] = useState(false)
   const [isSpeaking, setIsSpeaking] = useState(false)
@@ -265,9 +270,6 @@ function InterviewPage() {
     return () => { cancelled = true }
   }, [candidate, hasStarted])
 
-  // Chrome has a known bug where speechSynthesis silently pauses itself after ~15s
-  // of continuous speaking, or after a fullscreen/visibility change. Nudging resume()
-  // repeatedly while something is supposed to be speaking works around it.
   useEffect(() => {
     if (!isSpeaking) return
     const watchdog = setInterval(() => {
@@ -428,7 +430,17 @@ function InterviewPage() {
       return
     }
 
+    // Make sure any previous instance is fully stopped before starting a new one —
+    // this, combined with the id guard below, is what prevents overlapping instances
+    // from both writing duplicated words into the answer box.
+    if (recognitionRef.current) {
+      try { recognitionRef.current.stop() } catch { /* already stopped */ }
+      recognitionRef.current = null
+    }
+
     setVoiceError('')
+    const thisId = ++recognitionIdRef.current
+
     const recognition = new SpeechRecognitionAPI()
     recognition.lang = 'en-IN'
     recognition.continuous = true
@@ -437,19 +449,23 @@ function InterviewPage() {
     let finalTranscript = currentAnswer ? currentAnswer + ' ' : ''
 
     recognition.onresult = (event: any) => {
+      if (recognitionIdRef.current !== thisId) return // stale instance, ignore
+
       let interimTranscript = ''
       for (let i = event.resultIndex; i < event.results.length; i++) {
         const transcript = event.results[i][0].transcript
         if (event.results[i].isFinal) finalTranscript += transcript + ' '
         else interimTranscript += transcript
       }
-      setCurrentAnswer(finalTranscript + interimTranscript)
+      setCurrentAnswer(collapseRepeatedWords(finalTranscript + interimTranscript))
     }
 
     recognition.onerror = (event: any) => {
+      if (recognitionIdRef.current !== thisId) return // stale instance, ignore
+
       if (event.error === 'no-speech' && !isRetry) {
         setIsListening(false)
-        setTimeout(() => startListening(true), 300)
+        setTimeout(() => startListening(true), 400)
         return
       }
       if (event.error === 'no-speech') {
@@ -462,7 +478,10 @@ function InterviewPage() {
       setIsListening(false)
     }
 
-    recognition.onend = () => setIsListening(false)
+    recognition.onend = () => {
+      if (recognitionIdRef.current !== thisId) return // stale instance, ignore
+      setIsListening(false)
+    }
 
     recognitionRef.current = recognition
     recognition.start()
@@ -470,7 +489,11 @@ function InterviewPage() {
   }
 
   const stopListening = () => {
-    if (recognitionRef.current) recognitionRef.current.stop()
+    recognitionIdRef.current++ // invalidates any in-flight callbacks from the current instance
+    if (recognitionRef.current) {
+      try { recognitionRef.current.stop() } catch { /* already stopped */ }
+      recognitionRef.current = null
+    }
     setIsListening(false)
   }
 
